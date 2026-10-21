@@ -29,6 +29,7 @@ urlpatterns = [
     path("api/auth/", include("accounts.urls")),
     path("api/knowledge/", include("knowledge.urls")),
     path("api/chat/", include("chat.urls")),
+    path("api/analytics/", include("analytics.urls")),
     path(
         "api/auth/login/",
         TokenObtainPairView.as_view(),

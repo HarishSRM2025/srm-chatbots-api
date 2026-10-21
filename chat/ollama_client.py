@@ -50,15 +50,12 @@ def generate_response(
             "Ollama returned an invalid response."
         ) from exc
 
-        if not isinstance(generated_text, str):
-            raise OllamaError("Ollama returned an invalid response.")
-
     generated_text = data.get("response", "")
 
     if not isinstance(generated_text, str):
         raise OllamaError("Ollama returned an invalid response.")
 
-    # Handle responses with a missing opening <think> tag.
+    # If a closing tag exists, discard everything before it.
     if re.search(r"</think\s*>", generated_text, flags=re.IGNORECASE):
         generated_text = re.split(
             r"</think\s*>",
@@ -75,33 +72,7 @@ def generate_response(
         flags=re.IGNORECASE | re.DOTALL,
     )
 
-    # Remove an unclosed reasoning block.
-    generated_text = re.sub(
-        r"<think\b[^>]*>.*$",
-        "",
-        generated_text,
-        flags=re.IGNORECASE | re.DOTALL,
-    ).strip()
-
-    if not generated_text:
-        raise OllamaError(
-            "Ollama returned no user-facing response."
-        )
-
-    return generated_text
-
-    if not isinstance(generated_text, str):
-        raise OllamaError("Ollama returned an invalid response.")
-
-    # Remove complete reasoning blocks.
-    generated_text = re.sub(
-        r"<think\b[^>]*>.*?</think\s*>",
-        "",
-        generated_text,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-
-    # If a reasoning block is unclosed, discard it rather than expose it.
+    # Discard any unclosed reasoning block.
     generated_text = re.sub(
         r"<think\b[^>]*>.*$",
         "",

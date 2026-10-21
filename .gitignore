@@ -1,0 +1,37 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Test TLS certificates and private keys
+/tests/tls/
+
+# Test and coverage artifacts
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Django
+staticfiles/
+media/
+
+# Local databases
+db.sqlite3
+
+# Local test uploads
+/media/
+
+# Temporary TLS test artifacts
+/tests/tls/
+
+# Local backup files
+*.bak

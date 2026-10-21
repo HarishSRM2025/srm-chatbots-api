@@ -1,0 +1,3 @@
+﻿Document Upload Test
+The test admissions office is open from 10:00 AM to 4:00 PM on weekdays.
+The fictional test admissions email is admissions-test@example.com.

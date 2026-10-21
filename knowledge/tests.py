@@ -1,4 +1,4 @@
-from unittest.mock import patch
+﻿from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 # from django.test import APITestCase, SimpleTestCase, TestCase
@@ -289,6 +289,34 @@ class KnowledgeSourcePermissionTests(APITestCase):
         self.assertEqual(response.status_code, 404)
 
 
+    def test_user_cannot_create_source_for_another_users_agent(self):
+        self.client.force_authenticate(user=self.user1)
+
+        response = self.client.post(
+            self.list_url,
+            {
+                "agent": self.agent2.id,
+                "title": "Unauthorized Knowledge Source",
+                "source_type": "text",
+                "text_content": "Private knowledge belonging to user 2.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+            response.data,
+        )
+
+        self.assertFalse(
+            KnowledgeSource.objects.filter(
+                agent=self.agent2,
+                title="Unauthorized Knowledge Source",
+            ).exists()
+        )
+
+
 class KnowledgeSourceFileValidationTests(TestCase):
     def setUp(self):
         User = get_user_model()
@@ -521,6 +549,55 @@ class KnowledgeSourceProcessingAPITests(APITestCase):
         )
         self.assertTrue(source.error_message)
 
+
+    @patch("knowledge.views.create_source_chunks")
+    def test_processing_failure_does_not_expose_internal_error(
+        self, mock_create_chunks
+    ):
+        mock_create_chunks.side_effect = RuntimeError(
+            "Sensitive database connection details"
+        )
+
+        source = KnowledgeSource.objects.create(
+            agent=self.agent1,
+            title="Internal Error Test",
+            source_type=KnowledgeSource.SourceType.TEXT,
+            text_content="Valid nursing admissions information.",
+        )
+
+        self.client.force_authenticate(user=self.user1)
+
+        response = self.client.post(
+            f"/api/knowledge/{source.id}/process/"
+        )
+
+        source.refresh_from_db()
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+        self.assertEqual(
+            source.status,
+            KnowledgeSource.Status.FAILED,
+        )
+        self.assertNotIn(
+            "Sensitive database connection details",
+            str(response.data),
+        )
+        self.assertIn("detail", response.data)
+        self.assertEqual(source.chunks.count(), 0)
+        self.assertNotIn(
+            "The website could not be fetched.",
+            str(response.data),
+        )
+        self.assertIn("detail", response.data)
+        self.assertNotIn("error_message", response.data)
+        self.assertNotIn(
+            "Sensitive database connection details",
+            response.data["detail"],
+        )
+
     def test_creating_text_source_processes_it_automatically(self):
         self.client.force_authenticate(user=self.user1)
 
@@ -752,6 +829,48 @@ class KnowledgeSourceProcessingAPITests(APITestCase):
 
         # Remove the uploaded file created by this test.
         source.file.delete(save=False)
+
+
+    def test_updating_text_source_to_empty_content_is_rejected(self):
+        self.client.force_authenticate(user=self.user1)
+
+        source = KnowledgeSource.objects.create(
+            agent=self.agent1,
+            title="Existing Text Source",
+            source_type=KnowledgeSource.SourceType.TEXT,
+            text_content="Original nursing admissions information.",
+            status=KnowledgeSource.Status.READY,
+        )
+
+        KnowledgeChunk.objects.create(
+            source=source,
+            content="Original nursing admissions information.",
+            chunk_index=0,
+        )
+
+        response = self.client.patch(
+            f"/api/knowledge/{source.id}/",
+            {"text_content": "   "},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+            response.data,
+        )
+
+        source.refresh_from_db()
+
+        self.assertEqual(
+            source.text_content,
+            "Original nursing admissions information.",
+        )
+        self.assertEqual(source.chunks.count(), 1)
+        self.assertEqual(
+            source.chunks.first().content,
+            "Original nursing admissions information.",
+        )
 
 
 class KnowledgeSourceSerializerValidationTests(TestCase):

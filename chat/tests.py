@@ -244,3 +244,61 @@ class ConversationAPITests(APITestCase):
             status.HTTP_503_SERVICE_UNAVAILABLE,
         )
         self.assertNotIn("Internal test detail", str(response.data))
+
+
+    def test_message_over_10000_characters_is_rejected(self):
+        self.client.force_authenticate(user=self.user1)
+
+        response = self.client.post(
+            self.send_url,
+            {"content": "a" * 10001},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        self.assertEqual(
+            Message.objects.filter(
+                conversation=self.conversation
+            ).count(),
+            0,
+        )
+
+    @patch("chat.views.generate_response")
+    def test_ollama_failure_preserves_user_message_only(
+        self,
+        mock_generate,
+    ):
+        from chat.ollama_client import OllamaError
+
+        mock_generate.side_effect = OllamaError(
+            "Internal test detail"
+        )
+        self.client.force_authenticate(user=self.user1)
+
+        response = self.client.post(
+            self.send_url,
+            {"content": "Explain admission eligibility."},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+        messages = Message.objects.filter(
+            conversation=self.conversation
+        )
+
+        self.assertEqual(messages.count(), 1)
+
+        saved_message = messages.get()
+        self.assertEqual(saved_message.role, Message.Role.USER)
+        self.assertEqual(
+            saved_message.content,
+            "Explain admission eligibility.",
+        )
+        self.assertNotIn("Internal test detail", str(response.data))

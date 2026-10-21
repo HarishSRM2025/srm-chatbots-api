@@ -31,3 +31,26 @@ class AgentSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+
+    
+    def validate_name(self, value):
+        request = self.context.get("request")
+
+        if request and request.user.is_authenticated:
+            existing_agents = Agent.objects.filter(
+                owner=request.user,
+                name=value,
+            )
+
+            if self.instance:
+                existing_agents = existing_agents.exclude(
+                    pk=self.instance.pk
+                )
+
+            if existing_agents.exists():
+                raise serializers.ValidationError(
+                    "You already have an agent with this name."
+                )
+
+        return value

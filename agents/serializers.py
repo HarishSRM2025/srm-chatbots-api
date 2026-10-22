@@ -21,6 +21,7 @@ class AgentSerializer(serializers.ModelSerializer):
             "system_prompt",
             "model_name",
             "status",
+            "is_public",
             "created_at",
             "updated_at",
         ]

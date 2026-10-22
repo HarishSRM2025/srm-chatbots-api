@@ -1,14 +1,29 @@
-
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.utils import timezone
+
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from agents.models import Agent
-from chat.models import Conversation, Message
+from chat.models import Conversation, Message, WidgetSession
+from chat.widget_security import (
+    create_widget_session,
+    get_widget_session,
+)
 from knowledge.models import KnowledgeChunk, KnowledgeSource
 
+from agents.models import Agent
+from chat.models import (
+    Conversation,
+    Message,
+    WidgetConversation,
+    WidgetMessage,
+    WidgetSession,
+)
+from chat.widget_security import create_widget_session
 
 class ConversationAPITests(APITestCase):
     def setUp(self):
@@ -302,3 +317,568 @@ class ConversationAPITests(APITestCase):
             "Explain admission eligibility.",
         )
         self.assertNotIn("Internal test detail", str(response.data))
+
+
+
+class WidgetSessionSecurityTests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.owner = User.objects.create_user(
+            username="widget_owner",
+            password="TestPass123!safe",
+        )
+        self.other_owner = User.objects.create_user(
+            username="widget_other_owner",
+            password="TestPass123!safe",
+        )
+
+        self.agent = Agent.objects.create(
+            owner=self.owner,
+            name="Public Widget Agent",
+            system_prompt="Answer helpfully.",
+            is_public=True,
+        )
+        self.other_agent = Agent.objects.create(
+            owner=self.other_owner,
+            name="Other Public Agent",
+            system_prompt="Answer helpfully.",
+            is_public=True,
+        )
+
+    def test_session_creation_returns_token_but_stores_only_hash(self):
+        session, token = create_widget_session(self.agent)
+
+        self.assertTrue(token)
+        self.assertNotEqual(session.token_hash, token)
+        self.assertEqual(
+            len(session.token_hash),
+            64,
+        )
+        self.assertEqual(
+            session.token_hash,
+            __import__("hashlib").sha256(
+                token.encode("utf-8")
+            ).hexdigest(),
+        )
+
+    def test_valid_session_can_be_retrieved_for_its_agent(self):
+        session, token = create_widget_session(self.agent)
+
+        retrieved = get_widget_session(token, self.agent.id)
+
+        self.assertEqual(retrieved, session)
+
+    def test_session_cannot_be_used_for_another_agent(self):
+        _, token = create_widget_session(self.agent)
+
+        retrieved = get_widget_session(token, self.other_agent.id)
+
+        self.assertIsNone(retrieved)
+
+    def test_expired_session_is_rejected(self):
+        session, token = create_widget_session(self.agent)
+        session.expires_at = timezone.now() - timedelta(seconds=1)
+        session.save(update_fields=["expires_at"])
+
+        self.assertIsNone(
+            get_widget_session(token, self.agent.id)
+        )
+
+    def test_revoked_session_is_rejected(self):
+        session, token = create_widget_session(self.agent)
+        session.revoked_at = timezone.now()
+        session.save(update_fields=["revoked_at"])
+
+        self.assertIsNone(
+            get_widget_session(token, self.agent.id)
+        )
+
+    def test_private_agent_session_is_rejected(self):
+        _, token = create_widget_session(self.agent)
+        self.agent.is_public = False
+        self.agent.save(update_fields=["is_public"])
+
+        self.assertIsNone(
+            get_widget_session(token, self.agent.id)
+        )
+
+    def test_inactive_agent_session_is_rejected(self):
+        _, token = create_widget_session(self.agent)
+        self.agent.status = Agent.Status.INACTIVE
+        self.agent.save(update_fields=["status"])
+
+        self.assertIsNone(
+            get_widget_session(token, self.agent.id)
+        )
+
+    def test_invalid_or_oversized_tokens_are_rejected(self):
+        self.assertIsNone(
+            get_widget_session("", self.agent.id)
+        )
+        self.assertIsNone(
+            get_widget_session(None, self.agent.id)
+        )
+        self.assertIsNone(
+            get_widget_session("x" * 257, self.agent.id)
+        )
+
+
+
+class WidgetSessionCreateAPITests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.owner = User.objects.create_user(
+            username="widget_api_owner",
+            password="TestPass123!safe",
+        )
+        self.public_agent = Agent.objects.create(
+            owner=self.owner,
+            name="Public Widget API Agent",
+            system_prompt="Answer helpfully.",
+            status=Agent.Status.ACTIVE,
+            is_public=True,
+        )
+        self.private_agent = Agent.objects.create(
+            owner=self.owner,
+            name="Private Widget API Agent",
+            system_prompt="Answer helpfully.",
+            status=Agent.Status.ACTIVE,
+            is_public=False,
+        )
+        self.inactive_agent = Agent.objects.create(
+            owner=self.owner,
+            name="Inactive Widget API Agent",
+            system_prompt="Answer helpfully.",
+            status=Agent.Status.INACTIVE,
+            is_public=True,
+        )
+        self.url = "/api/chat/widget/sessions/"
+
+    def test_public_active_agent_can_create_widget_session(self):
+        response = self.client.post(
+            self.url,
+            {"agent_id": self.public_agent.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn("session_token", response.data)
+        self.assertIn("expires_at", response.data)
+        self.assertEqual(response.data["agent_id"], self.public_agent.id)
+        self.assertNotIn("token_hash", response.data)
+
+        session = WidgetSession.objects.get(agent=self.public_agent)
+        self.assertNotEqual(
+            session.token_hash,
+            response.data["session_token"],
+        )
+        self.assertTrue(
+            get_widget_session(
+                response.data["session_token"],
+                self.public_agent.id,
+            )
+        )
+
+    def test_private_agent_cannot_create_widget_session(self):
+        response = self.client.post(
+            self.url,
+            {"agent_id": self.private_agent.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(
+            WidgetSession.objects.filter(agent=self.private_agent).exists()
+        )
+
+    def test_inactive_agent_cannot_create_widget_session(self):
+        response = self.client.post(
+            self.url,
+            {"agent_id": self.inactive_agent.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(
+            WidgetSession.objects.filter(agent=self.inactive_agent).exists()
+        )
+
+    def test_missing_agent_id_returns_validation_error(self):
+        response = self.client.post(
+            self.url,
+            {},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        self.assertIn("agent_id", response.data)
+        self.assertEqual(WidgetSession.objects.count(), 0)
+
+
+
+class WidgetConversationCreateAPITests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.owner = User.objects.create_user(
+            username="widget_conversation_owner",
+            password="TestPass123!safe",
+        )
+        self.other_owner = User.objects.create_user(
+            username="widget_conversation_other",
+            password="TestPass123!safe",
+        )
+
+        self.agent = Agent.objects.create(
+            owner=self.owner,
+            name="Widget Conversation Agent",
+            system_prompt="Answer helpfully.",
+            status=Agent.Status.ACTIVE,
+            is_public=True,
+        )
+        self.other_agent = Agent.objects.create(
+            owner=self.other_owner,
+            name="Other Widget Conversation Agent",
+            system_prompt="Answer helpfully.",
+            status=Agent.Status.ACTIVE,
+            is_public=True,
+        )
+
+        self.session, self.token = create_widget_session(self.agent)
+        self.url = "/api/chat/widget/conversations/"
+
+    def test_valid_session_can_create_conversation(self):
+        response = self.client.post(
+            self.url,
+            {"agent_id": self.agent.id, "title": "Visitor question"},
+            format="json",
+            HTTP_X_WIDGET_SESSION=self.token,
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+            response.data,
+        )
+        self.assertEqual(response.data["title"], "Visitor question")
+        self.assertTrue(
+            WidgetConversation.objects.filter(
+                session=self.session,
+                title="Visitor question",
+            ).exists()
+        )
+
+    def test_missing_session_token_is_rejected(self):
+        response = self.client.post(
+            self.url,
+            {"agent_id": self.agent.id},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    def test_session_cannot_create_conversation_for_another_agent(self):
+        response = self.client.post(
+            self.url,
+            {"agent_id": self.other_agent.id},
+            format="json",
+            HTTP_X_WIDGET_SESSION=self.token,
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+        self.assertEqual(WidgetConversation.objects.count(), 0)
+
+    def test_expired_session_cannot_create_conversation(self):
+        self.session.expires_at = timezone.now() - timedelta(seconds=1)
+        self.session.save(update_fields=["expires_at"])
+
+        response = self.client.post(
+            self.url,
+            {"agent_id": self.agent.id},
+            format="json",
+            HTTP_X_WIDGET_SESSION=self.token,
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+        self.assertEqual(WidgetConversation.objects.count(), 0)
+
+    def test_missing_agent_id_is_rejected(self):
+        response = self.client.post(
+            self.url,
+            {},
+            format="json",
+            HTTP_X_WIDGET_SESSION=self.token,
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        self.assertEqual(WidgetConversation.objects.count(), 0)
+
+    def test_invalid_title_is_rejected(self):
+        response = self.client.post(
+            self.url,
+            {"agent_id": self.agent.id, "title": 123},
+            format="json",
+            HTTP_X_WIDGET_SESSION=self.token,
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+        self.assertEqual(WidgetConversation.objects.count(), 0)
+
+
+
+class WidgetMessageCreateAPITests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(
+            username="widget_message_owner",
+            email="widget_message_owner@example.com",
+            password="TestPass!987654",
+        )
+
+        self.agent = Agent.objects.create(
+            owner=self.user,
+            name="Public Test Agent",
+            description="Agent used for widget message tests",
+            system_prompt="You are a helpful institutional assistant.",
+            model_name="qwen3:4b",
+            status=Agent.Status.ACTIVE,
+            is_public=True,
+        )
+
+        self.session, self.token = create_widget_session(self.agent)
+
+        self.conversation = WidgetConversation.objects.create(
+            session=self.session,
+            title="Test conversation",
+        )
+
+        self.url = (
+            f"/api/chat/widget/conversations/"
+            f"{self.conversation.pk}/messages/"
+        )
+
+    def send_message(self, content, token=None, agent_id=None):
+        return self.client.post(
+            self.url,
+            {
+                "agent_id": agent_id or self.agent.pk,
+                "content": content,
+            },
+            format="json",
+            HTTP_X_WIDGET_SESSION=token or self.token,
+        )
+
+    @patch("chat.views.generate_response")
+    @patch("chat.views.retrieve_relevant_chunks")
+    def test_sends_message_and_returns_ai_response(
+        self, mock_retrieve, mock_generate
+    ):
+        mock_retrieve.return_value = []
+        mock_generate.return_value = "Hello! How can I help you?"
+
+        response = self.send_message("Hello")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["user_message"]["content"], "Hello"
+        )
+        self.assertEqual(
+            response.data["user_message"]["role"], "user"
+        )
+        self.assertEqual(
+            response.data["assistant_message"]["content"],
+            "Hello! How can I help you?",
+        )
+        self.assertEqual(
+            response.data["assistant_message"]["role"], "assistant"
+        )
+        self.assertEqual(
+            WidgetMessage.objects.filter(
+                conversation=self.conversation
+            ).count(),
+            2,
+        )
+
+        mock_retrieve.assert_called_once_with(
+            agent_id=self.agent.pk,
+            query="Hello",
+            limit=5,
+        )
+        mock_generate.assert_called_once()
+
+    @patch("chat.views.generate_response")
+    @patch("chat.views.retrieve_relevant_chunks")
+    def test_passes_agent_knowledge_to_ai(
+        self, mock_retrieve, mock_generate
+    ):
+        source = KnowledgeSource.objects.create(
+            agent=self.agent,
+            title="Admissions Guide",
+            source_type=KnowledgeSource.SourceType.TEXT,
+            text_content="Admission information",
+            status=KnowledgeSource.Status.READY,
+        )
+        chunk = KnowledgeChunk.objects.create(
+            source=source,
+            content="Applications open in June.",
+            chunk_index=0,
+        )
+
+        mock_retrieve.return_value = [chunk]
+        mock_generate.return_value = "Applications open in June."
+
+        response = self.send_message("When do applications open?")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        prompt = mock_generate.call_args.kwargs["prompt"]
+        self.assertIn("Admissions Guide", prompt)
+        self.assertIn("Applications open in June.", prompt)
+
+        self.assertEqual(
+            response.data["sources"],
+            [{"title": "Admissions Guide", "chunk_index": 0}],
+        )
+
+    def test_rejects_missing_session_token(self):
+        response = self.client.post(
+            self.url,
+            {
+                "agent_id": self.agent.pk,
+                "content": "Hello",
+            },
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code, status.HTTP_401_UNAUTHORIZED
+        )
+        self.assertEqual(
+            WidgetMessage.objects.filter(
+                conversation=self.conversation
+            ).count(),
+            0,
+        )
+
+    def test_rejects_invalid_session_token(self):
+        response = self.send_message(
+            "Hello",
+            token="invalid-widget-token",
+        )
+
+        self.assertEqual(
+            response.status_code, status.HTTP_401_UNAUTHORIZED
+        )
+
+    def test_rejects_token_for_different_agent(self):
+        other_agent = Agent.objects.create(
+            owner=self.user,
+            name="Another Public Agent",
+            description="Another test agent",
+            system_prompt="You are helpful.",
+            model_name="qwen3:4b",
+            status=Agent.Status.ACTIVE,
+            is_public=True,
+        )
+
+        response = self.send_message(
+            "Hello",
+            agent_id=other_agent.pk,
+        )
+
+        self.assertEqual(
+            response.status_code, status.HTTP_401_UNAUTHORIZED
+        )
+
+    def test_cannot_access_another_sessions_conversation(self):
+        another_session, another_token = create_widget_session(
+            self.agent
+        )
+        another_conversation = WidgetConversation.objects.create(
+            session=another_session,
+            title="Private visitor conversation",
+        )
+
+        response = self.client.post(
+            f"/api/chat/widget/conversations/"
+            f"{another_conversation.pk}/messages/",
+            {
+                "agent_id": self.agent.pk,
+                "content": "Hello",
+            },
+            format="json",
+            HTTP_X_WIDGET_SESSION=self.token,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+        self.assertEqual(
+            WidgetMessage.objects.filter(
+                conversation=another_conversation
+            ).count(),
+            0,
+        )
+
+    def test_rejects_empty_message(self):
+        response = self.send_message("   ")
+
+        self.assertEqual(
+            response.status_code, status.HTTP_400_BAD_REQUEST
+        )
+
+    def test_rejects_oversized_message(self):
+        response = self.send_message("x" * 10001)
+
+        self.assertEqual(
+            response.status_code, status.HTTP_400_BAD_REQUEST
+        )
+
+    @patch("chat.views.generate_response")
+    @patch("chat.views.retrieve_relevant_chunks")
+    def test_ollama_failure_returns_service_unavailable(
+        self, mock_retrieve, mock_generate
+    ):
+        from chat.ollama_client import OllamaError
+
+        mock_retrieve.return_value = []
+        mock_generate.side_effect = OllamaError("Test connection failure")
+
+        response = self.send_message("Hello")
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+        self.assertEqual(
+            WidgetMessage.objects.filter(
+                conversation=self.conversation,
+                role=WidgetMessage.Role.USER,
+            ).count(),
+            1,
+        )
+
+        self.assertEqual(
+            WidgetMessage.objects.filter(
+                conversation=self.conversation,
+                role=WidgetMessage.Role.ASSISTANT,
+            ).count(),
+            0,
+        )

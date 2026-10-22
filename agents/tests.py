@@ -209,3 +209,58 @@ class AgentAPITests(APITestCase):
         self.assertFalse(
             Agent.objects.filter(pk=self.agent1.pk).exists()
         )
+
+    def test_new_agent_is_private_by_default(self):
+        self.assertFalse(self.agent1.is_public)
+        self.client.force_authenticate(user=self.user1)
+
+        response = self.client.get(self.detail_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["is_public"])
+
+    def test_owner_can_make_agent_public(self):
+        self.client.force_authenticate(user=self.user1)
+
+        response = self.client.patch(
+            self.detail_url,
+            {"is_public": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.agent1.refresh_from_db()
+        self.assertTrue(self.agent1.is_public)
+        self.assertTrue(response.data["is_public"])
+
+    def test_owner_can_make_agent_private_again(self):
+        self.agent1.is_public = True
+        self.agent1.save(update_fields=["is_public"])
+        self.client.force_authenticate(user=self.user1)
+
+        response = self.client.patch(
+            self.detail_url,
+            {"is_public": False},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.agent1.refresh_from_db()
+        self.assertFalse(self.agent1.is_public)
+
+    def test_user_cannot_change_another_users_agent_visibility(self):
+        self.client.force_authenticate(user=self.user1)
+        url = f"/api/agents/{self.agent2.id}/"
+
+        response = self.client.patch(
+            url,
+            {"is_public": True},
+            format="json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+        self.agent2.refresh_from_db()
+        self.assertFalse(self.agent2.is_public)

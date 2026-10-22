@@ -1,4 +1,4 @@
-
+﻿
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 
@@ -20,9 +20,15 @@ from .models import (
 )
 from .ollama_client import OllamaError, generate_response
 from .serializers import ConversationSerializer, MessageSerializer
+from .throttles import (
+    WidgetMessageRateThrottle,
+    WidgetSessionRateThrottle,
+)
 from .widget_message_serializers import WidgetMessageSerializer
+from .widget_origin import validate_widget_origin
 from .widget_security import create_widget_session, get_widget_session
 from .widget_serializers import WidgetConversationSerializer
+
 
 class OllamaServiceUnavailable(APIException):
     status_code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -50,7 +56,7 @@ class WidgetConversationCreateView(APIView):
                 {"detail": "Invalid or expired widget session."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
-
+        validate_widget_origin(request, session.agent)
         title = request.data.get("title", "")
 
         if not isinstance(title, str):
@@ -245,6 +251,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
 class WidgetMessageCreateView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
+    throttle_classes = [WidgetMessageRateThrottle]
 
     def post(self, request, conversation_id):
         agent_id = request.data.get("agent_id")
@@ -264,6 +271,7 @@ class WidgetMessageCreateView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
+        validate_widget_origin(request, session.agent)
         conversation = get_object_or_404(
             WidgetConversation,
             pk=conversation_id,
@@ -369,9 +377,12 @@ FINAL ANSWER:
         )
 
 
+
+
 class WidgetSessionCreateView(viewsets.ViewSet):
     permission_classes = [AllowAny]
     http_method_names = ["post", "options"]
+    throttle_classes = [WidgetSessionRateThrottle]
 
     def create(self, request):
         agent_id = request.data.get("agent_id")
@@ -387,6 +398,8 @@ class WidgetSessionCreateView(viewsets.ViewSet):
             status=Agent.Status.ACTIVE,
             is_public=True,
         )
+
+        validate_widget_origin(request, agent)
 
         session, token = create_widget_session(agent)
 

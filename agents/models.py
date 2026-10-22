@@ -24,6 +24,7 @@ class Agent(models.Model):
         default=Status.ACTIVE,
     )
     is_public = models.BooleanField(default=False)
+    allowed_origins = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

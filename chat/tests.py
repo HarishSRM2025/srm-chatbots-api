@@ -1,12 +1,12 @@
-from datetime import timedelta
+﻿from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
 from rest_framework import status
+from django.test import SimpleTestCase, TestCase
 from rest_framework.test import APITestCase
-
 from agents.models import Agent
 from chat.models import Conversation, Message, WidgetSession
 from chat.widget_security import (
@@ -24,6 +24,8 @@ from chat.models import (
     WidgetSession,
 )
 from chat.widget_security import create_widget_session
+
+from chat.widget_origin import is_origin_allowed, normalize_origin
 
 class ConversationAPITests(APITestCase):
     def setUp(self):
@@ -517,6 +519,82 @@ class WidgetSessionCreateAPITests(APITestCase):
         self.assertIn("agent_id", response.data)
         self.assertEqual(WidgetSession.objects.count(), 0)
 
+    def test_allowed_origin_can_create_widget_session(self):
+        self.public_agent.allowed_origins = ["https://example.com"]
+        self.public_agent.save(update_fields=["allowed_origins"])
+
+        response = self.client.post(
+            self.url,
+            {"agent_id": self.public_agent.id},
+            format="json",
+            HTTP_ORIGIN="https://example.com",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+        )
+        self.assertTrue(
+            WidgetSession.objects.filter(
+                agent=self.public_agent
+            ).exists()
+        )
+
+    def test_disallowed_origin_cannot_create_widget_session(self):
+        self.public_agent.allowed_origins = ["https://example.com"]
+        self.public_agent.save(update_fields=["allowed_origins"])
+
+        response = self.client.post(
+            self.url,
+            {"agent_id": self.public_agent.id},
+            format="json",
+            HTTP_ORIGIN="https://malicious.example",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+        self.assertFalse(
+            WidgetSession.objects.filter(
+                agent=self.public_agent
+            ).exists()
+        )
+
+
+    def test_session_rate_limit_returns_429(self):
+        from django.core.cache import cache
+        from unittest.mock import patch
+
+        cache.clear()
+
+        with patch(
+            "chat.throttles.WidgetSessionRateThrottle.get_rate",
+            return_value="2/minute",
+        ):
+            self.client.post(
+                self.url,
+                {"agent_id": self.public_agent.id},
+                format="json",
+            )
+            self.client.post(
+                self.url,
+                {"agent_id": self.public_agent.id},
+                format="json",
+            )
+            response = self.client.post(
+                self.url,
+                {"agent_id": self.public_agent.id},
+                format="json",
+            )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+        cache.clear()
+
+
 
 
 class WidgetConversationCreateAPITests(APITestCase):
@@ -626,6 +704,58 @@ class WidgetConversationCreateAPITests(APITestCase):
             status.HTTP_400_BAD_REQUEST,
         )
         self.assertEqual(WidgetConversation.objects.count(), 0)
+
+    def test_allowed_origin_can_create_conversation(self):
+        self.agent.allowed_origins = ["https://example.com"]
+        self.agent.save(update_fields=["allowed_origins"])
+
+        response = self.client.post(
+            self.url,
+            {
+                "agent_id": self.agent.id,
+                "title": "Allowed origin conversation",
+            },
+            format="json",
+            HTTP_X_WIDGET_SESSION=self.token,
+            HTTP_ORIGIN="https://example.com",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+            response.data,
+        )
+        self.assertTrue(
+            WidgetConversation.objects.filter(
+                session=self.session,
+                title="Allowed origin conversation",
+            ).exists()
+        )
+
+    def test_disallowed_origin_cannot_create_conversation(self):
+        self.agent.allowed_origins = ["https://example.com"]
+        self.agent.save(update_fields=["allowed_origins"])
+
+        response = self.client.post(
+            self.url,
+            {
+                "agent_id": self.agent.id,
+                "title": "Rejected origin conversation",
+            },
+            format="json",
+            HTTP_X_WIDGET_SESSION=self.token,
+            HTTP_ORIGIN="https://malicious.example",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+        self.assertFalse(
+            WidgetConversation.objects.filter(
+                session=self.session,
+            ).exists()
+        )
 
     def test_invalid_title_is_rejected(self):
         response = self.client.post(
@@ -881,4 +1011,152 @@ class WidgetMessageCreateAPITests(APITestCase):
                 role=WidgetMessage.Role.ASSISTANT,
             ).count(),
             0,
+        )
+
+
+    @patch("chat.views.generate_response")
+    @patch("chat.views.retrieve_relevant_chunks")
+    def test_allowed_origin_can_send_message(
+        self, mock_retrieve, mock_generate
+    ):
+        self.agent.allowed_origins = ["https://example.com"]
+        self.agent.save(update_fields=["allowed_origins"])
+
+        mock_retrieve.return_value = []
+        mock_generate.return_value = "Hello from the assistant."
+
+        response = self.client.post(
+            self.url,
+            {
+                "agent_id": self.agent.pk,
+                "content": "Hello",
+            },
+            format="json",
+            HTTP_X_WIDGET_SESSION=self.token,
+            HTTP_ORIGIN="https://example.com",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+            response.data,
+        )
+        self.assertEqual(
+            WidgetMessage.objects.filter(
+                conversation=self.conversation
+            ).count(),
+            2,
+        )
+
+    def test_disallowed_origin_cannot_send_message(self):
+        self.agent.allowed_origins = ["https://example.com"]
+        self.agent.save(update_fields=["allowed_origins"])
+
+        response = self.client.post(
+            self.url,
+            {
+                "agent_id": self.agent.pk,
+                "content": "Hello",
+            },
+            format="json",
+            HTTP_X_WIDGET_SESSION=self.token,
+            HTTP_ORIGIN="https://malicious.example",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+        self.assertEqual(
+            WidgetMessage.objects.filter(
+                conversation=self.conversation
+            ).count(),
+            0,
+        )
+
+    def test_message_rate_limit_returns_429(self):
+        from django.core.cache import cache
+        from unittest.mock import patch
+
+        cache.clear()
+
+        with patch(
+            "chat.throttles.WidgetMessageRateThrottle.get_rate",
+            return_value="2/minute",
+        ):
+            with patch("chat.views.generate_response") as mock_generate:
+                with patch(
+                    "chat.views.retrieve_relevant_chunks",
+                    return_value=[],
+                ):
+                    mock_generate.return_value = "Test response"
+
+                    self.send_message("First message")
+                    self.send_message("Second message")
+                    response = self.send_message("Third message")
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+        cache.clear()
+
+
+
+class WidgetOriginValidationTests(SimpleTestCase):
+    def test_normalizes_scheme_hostname_and_default_port(self):
+        self.assertEqual(
+            normalize_origin("HTTPS://Example.com:443"),
+            "https://example.com",
+        )
+
+    def test_normalizes_http_default_port(self):
+        self.assertEqual(
+            normalize_origin("http://Example.com:80"),
+            "http://example.com",
+        )
+
+    def test_rejects_null_origin(self):
+        self.assertIsNone(normalize_origin("null"))
+
+    def test_rejects_origin_with_path(self):
+        self.assertIsNone(
+            normalize_origin("https://example.com/page")
+        )
+
+    def test_rejects_invalid_origin(self):
+        self.assertIsNone(normalize_origin("not-a-valid-origin"))
+
+    def test_allows_configured_origin(self):
+        self.assertTrue(
+            is_origin_allowed(
+                "https://example.com",
+                ["https://example.com"],
+            )
+        )
+
+    def test_rejects_unconfigured_origin(self):
+        self.assertFalse(
+            is_origin_allowed(
+                "https://attacker.example",
+                ["https://example.com"],
+            )
+        )
+
+    def test_rejects_origin_when_allowlist_is_empty(self):
+        self.assertFalse(
+            is_origin_allowed("https://example.com", [])
+        )
+
+    def test_rejects_malformed_allowlist(self):
+        self.assertFalse(
+            is_origin_allowed(
+                "https://example.com",
+                "https://example.com",
+            )
+        )
+
+    def test_allows_missing_origin_for_token_validation(self):
+        self.assertTrue(
+            is_origin_allowed(None, [])
         )

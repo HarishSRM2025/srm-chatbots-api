@@ -83,6 +83,46 @@ class WidgetConversationCreateView(APIView):
 
 
 
+class WidgetConversationHistoryView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    http_method_names = ["get", "options"]
+
+    def get(self, request, conversation_id):
+        agent_id = request.query_params.get("agent_id")
+        session_token = request.headers.get("X-Widget-Session")
+
+        if not agent_id:
+            raise ValidationError({"agent_id": "This field is required."})
+
+        session = get_widget_session(session_token, agent_id)
+
+        if session is None:
+            return Response(
+                {"detail": "Invalid or expired widget session."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        validate_widget_origin(request, session.agent)
+
+        conversation = get_object_or_404(
+            WidgetConversation.objects.prefetch_related("messages"),
+            pk=conversation_id,
+            session=session,
+        )
+
+        return Response(
+            {
+                "conversation": WidgetConversationSerializer(conversation).data,
+                "messages": WidgetMessageSerializer(
+                    conversation.messages.all(),
+                    many=True,
+                ).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class ConversationViewSet(viewsets.ModelViewSet):
     serializer_class = ConversationSerializer
     permission_classes = [IsAuthenticated]

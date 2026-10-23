@@ -773,6 +773,130 @@ class WidgetConversationCreateAPITests(APITestCase):
 
 
 
+class WidgetConversationHistoryAPITests(APITestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.owner = User.objects.create_user(
+            username="widget_history_owner",
+            password="TestPass123!safe",
+        )
+        self.agent = Agent.objects.create(
+            owner=self.owner,
+            name="Widget History Agent",
+            system_prompt="Answer helpfully.",
+            status=Agent.Status.ACTIVE,
+            is_public=True,
+        )
+        self.session, self.token = create_widget_session(self.agent)
+        self.conversation = WidgetConversation.objects.create(
+            session=self.session,
+            title="Previous questions",
+        )
+        self.user_message = WidgetMessage.objects.create(
+            conversation=self.conversation,
+            role=WidgetMessage.Role.USER,
+            content="What are your opening hours?",
+        )
+        self.assistant_message = WidgetMessage.objects.create(
+            conversation=self.conversation,
+            role=WidgetMessage.Role.ASSISTANT,
+            content="Please check the institution's published hours.",
+        )
+        self.url = (
+            f"/api/chat/widget/conversations/{self.conversation.id}/"
+        )
+
+    def test_valid_session_can_retrieve_conversation_history(self):
+        response = self.client.get(
+            self.url,
+            {"agent_id": self.agent.id},
+            format="json",
+            HTTP_X_WIDGET_SESSION=self.token,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["conversation"]["id"],
+            self.conversation.id,
+        )
+        self.assertEqual(len(response.data["messages"]), 2)
+        self.assertEqual(
+            response.data["messages"][0]["content"],
+            "What are your opening hours?",
+        )
+        self.assertEqual(
+            response.data["messages"][1]["content"],
+            "Please check the institution's published hours.",
+        )
+
+    def test_missing_session_token_is_rejected(self):
+        response = self.client.get(
+            self.url,
+            {"agent_id": self.agent.id},
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+    def test_missing_agent_id_is_rejected(self):
+        response = self.client.get(
+            self.url,
+            HTTP_X_WIDGET_SESSION=self.token,
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    def test_conversation_from_another_session_is_not_accessible(self):
+        other_session, other_token = create_widget_session(self.agent)
+
+        response = self.client.get(
+            self.url,
+            {"agent_id": self.agent.id},
+            HTTP_X_WIDGET_SESSION=other_token,
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+    def test_disallowed_origin_is_rejected(self):
+        self.agent.allowed_origins = ["https://example.com"]
+        self.agent.save(update_fields=["allowed_origins"])
+
+        response = self.client.get(
+            self.url,
+            {"agent_id": self.agent.id},
+            HTTP_X_WIDGET_SESSION=self.token,
+            HTTP_ORIGIN="https://malicious.example",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+
+    def test_expired_session_is_rejected(self):
+        self.session.expires_at = timezone.now() - timedelta(seconds=1)
+        self.session.save(update_fields=["expires_at"])
+
+        response = self.client.get(
+            self.url,
+            {"agent_id": self.agent.id},
+            HTTP_X_WIDGET_SESSION=self.token,
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+
+
 class WidgetMessageCreateAPITests(APITestCase):
     def setUp(self):
         User = get_user_model()

@@ -2,9 +2,11 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 
+
 from .views import (
     ConversationViewSet,
     WidgetConversationCreateView,
+    WidgetConversationHistoryView,
     WidgetMessageCreateView,
     WidgetSessionCreateView,
 )
@@ -31,5 +33,10 @@ urlpatterns = [
         "widget/conversations/<int:conversation_id>/messages/",
         WidgetMessageCreateView.as_view(),
         name="widget-message-create",
+    ),
+    path(
+        "widget/conversations/<int:conversation_id>/",
+        WidgetConversationHistoryView.as_view(),
+        name="widget-conversation-history",
     ),
 ] + router.urls

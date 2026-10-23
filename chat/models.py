@@ -120,3 +120,59 @@ class WidgetMessage(models.Model):
 
     def __str__(self):
         return f"{self.role} message - Widget conversation {self.conversation_id}"
+
+
+
+class WidgetMessageRequest(models.Model):
+    class Status(models.TextChoices):
+        PROCESSING = "processing", "Processing"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    conversation = models.ForeignKey(
+        WidgetConversation,
+        on_delete=models.CASCADE,
+        related_name="message_requests",
+    )
+    idempotency_key = models.CharField(max_length=128)
+    content_hash = models.CharField(max_length=64)
+    status = models.CharField(
+        max_length=12,
+        choices=Status.choices,
+        default=Status.PROCESSING,
+    )
+    user_message = models.ForeignKey(
+        WidgetMessage,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="widget_user_requests",
+    )
+    assistant_message = models.ForeignKey(
+        WidgetMessage,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="widget_assistant_requests",
+    )
+    sources = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["conversation", "idempotency_key"],
+                name="unique_widget_request_key_per_conversation",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["conversation", "status"]),
+        ]
+
+    def __str__(self):
+        return (
+            f"Widget request {self.pk} - "
+            f"Conversation {self.conversation_id} - {self.status}"
+        )

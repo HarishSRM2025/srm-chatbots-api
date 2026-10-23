@@ -1,5 +1,6 @@
 ﻿from datetime import timedelta
 from unittest.mock import patch
+import uuid
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
@@ -928,7 +929,14 @@ class WidgetMessageCreateAPITests(APITestCase):
             f"{self.conversation.pk}/messages/"
         )
 
-    def send_message(self, content, token=None, agent_id=None):
+
+    def send_message(
+        self,
+        content,
+        token=None,
+        agent_id=None,
+        idempotency_key=None,
+    ):
         return self.client.post(
             self.url,
             {
@@ -937,7 +945,11 @@ class WidgetMessageCreateAPITests(APITestCase):
             },
             format="json",
             HTTP_X_WIDGET_SESSION=token or self.token,
+            HTTP_IDEMPOTENCY_KEY=(
+                idempotency_key or str(uuid.uuid4())
+            ),
         )
+
 
     @patch("chat.views.generate_response")
     @patch("chat.views.retrieve_relevant_chunks")
@@ -1158,6 +1170,7 @@ class WidgetMessageCreateAPITests(APITestCase):
             format="json",
             HTTP_X_WIDGET_SESSION=self.token,
             HTTP_ORIGIN="https://example.com",
+            HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()),
         )
 
         self.assertEqual(
@@ -1225,6 +1238,131 @@ class WidgetMessageCreateAPITests(APITestCase):
         )
         cache.clear()
 
+
+    @patch("chat.views.generate_response")
+    def test_repeated_idempotency_key_returns_original_response(
+        self,
+        mock_generate,
+    ):
+        mock_generate.return_value = "Hello from the AI"
+        key = str(uuid.uuid4())
+
+        first_response = self.send_message(
+            "Hello",
+            idempotency_key=key,
+        )
+        second_response = self.send_message(
+            "Hello",
+            idempotency_key=key,
+        )
+
+        self.assertEqual(first_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(second_response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(
+            first_response.data,
+            second_response.data,
+        )
+        self.assertEqual(mock_generate.call_count, 1)
+
+        self.assertEqual(
+            WidgetMessage.objects.filter(
+                conversation=self.conversation,
+                role=WidgetMessage.Role.USER,
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            WidgetMessage.objects.filter(
+                conversation=self.conversation,
+                role=WidgetMessage.Role.ASSISTANT,
+            ).count(),
+            1,
+        )
+
+
+    @patch("chat.views.generate_response")
+    def test_reusing_idempotency_key_with_different_content_returns_conflict(
+        self,
+        mock_generate,
+    ):
+        mock_generate.return_value = "Hello from the AI"
+        key = str(uuid.uuid4())
+
+        first_response = self.send_message(
+            "Hello",
+            idempotency_key=key,
+        )
+        second_response = self.send_message(
+            "Tell me about admissions",
+            idempotency_key=key,
+        )
+
+        self.assertEqual(
+            first_response.status_code,
+            status.HTTP_200_OK,
+        )
+        self.assertEqual(
+            second_response.status_code,
+            status.HTTP_409_CONFLICT,
+        )
+        self.assertEqual(mock_generate.call_count, 1)
+
+        self.assertEqual(
+            WidgetMessage.objects.filter(
+                conversation=self.conversation,
+                role=WidgetMessage.Role.USER,
+            ).count(),
+            1,
+        )
+
+
+    @patch("chat.views.generate_response")
+    def test_failed_request_can_be_retried_with_same_key(
+        self,
+        mock_generate,
+    ):
+        from chat.views import OllamaError
+
+        mock_generate.side_effect = [
+            OllamaError("Local AI service unavailable"),
+            "Recovered AI response",
+        ]
+        key = str(uuid.uuid4())
+
+        first_response = self.send_message(
+            "Hello",
+            idempotency_key=key,
+        )
+        second_response = self.send_message(
+            "Hello",
+            idempotency_key=key,
+        )
+
+        self.assertEqual(
+            first_response.status_code,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+        self.assertEqual(
+            second_response.status_code,
+            status.HTTP_200_OK,
+        )
+        self.assertEqual(mock_generate.call_count, 2)
+
+        self.assertEqual(
+            WidgetMessage.objects.filter(
+                conversation=self.conversation,
+                role=WidgetMessage.Role.USER,
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            WidgetMessage.objects.filter(
+                conversation=self.conversation,
+                role=WidgetMessage.Role.ASSISTANT,
+            ).count(),
+            1,
+        )
 
 
 class WidgetOriginValidationTests(SimpleTestCase):

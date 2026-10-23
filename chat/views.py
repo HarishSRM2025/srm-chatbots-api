@@ -17,7 +17,11 @@ from .models import (
     Message,
     WidgetConversation,
     WidgetMessage,
+    WidgetMessageRequest,
 )
+from django.db import transaction
+import hashlib
+import uuid
 from .ollama_client import OllamaError, generate_response
 from .serializers import ConversationSerializer, MessageSerializer
 from .throttles import (
@@ -28,12 +32,100 @@ from .widget_message_serializers import WidgetMessageSerializer
 from .widget_origin import validate_widget_origin
 from .widget_security import create_widget_session, get_widget_session
 from .widget_serializers import WidgetConversationSerializer
+from django.db import IntegrityError, transaction
 
 
 class OllamaServiceUnavailable(APIException):
     status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     default_detail = "The local AI service is unavailable."
     default_code = "ollama_unavailable"
+
+
+class WidgetMessageConflict(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = (
+        "This message request conflicts with an existing request "
+        "or is already being processed."
+    )
+    default_code = "widget_message_conflict"
+
+
+def claim_widget_message_request(
+    conversation,
+    idempotency_key,
+    content,
+):
+    content_hash = hashlib.sha256(
+        content.encode("utf-8")
+    ).hexdigest()
+
+    try:
+        with transaction.atomic():
+            message_request = WidgetMessageRequest.objects.create(
+                conversation=conversation,
+                idempotency_key=idempotency_key,
+                content_hash=content_hash,
+                status=WidgetMessageRequest.Status.PROCESSING,
+            )
+
+            user_message = WidgetMessage.objects.create(
+                conversation=conversation,
+                role=WidgetMessage.Role.USER,
+                content=content,
+            )
+
+            message_request.user_message = user_message
+            message_request.save(update_fields=["user_message"])
+
+            return message_request, True
+
+    except IntegrityError:
+        pass
+
+    with transaction.atomic():
+        message_request = (
+            WidgetMessageRequest.objects
+            .select_for_update()
+            .get(
+                conversation=conversation,
+                idempotency_key=idempotency_key,
+            )
+        )
+
+        if message_request.content_hash != content_hash:
+            raise WidgetMessageConflict(
+                "This idempotency key was already used "
+                "with different message content."
+            )
+
+        if (
+            message_request.status
+            == WidgetMessageRequest.Status.COMPLETED
+        ):
+            return message_request, False
+
+        if (
+            message_request.status
+            == WidgetMessageRequest.Status.PROCESSING
+        ):
+            raise WidgetMessageConflict(
+                "This message request is already being processed."
+            )
+
+        if message_request.user_message_id is None:
+            user_message = WidgetMessage.objects.create(
+                conversation=conversation,
+                role=WidgetMessage.Role.USER,
+                content=content,
+            )
+            message_request.user_message = user_message
+
+        message_request.status = WidgetMessageRequest.Status.PROCESSING
+        message_request.save(
+            update_fields=["status", "user_message", "updated_at"]
+        )
+
+        return message_request, True
 
 
 class WidgetConversationCreateView(APIView):
@@ -172,7 +264,24 @@ class ConversationViewSet(viewsets.ModelViewSet):
             )
 
         content = request.data.get("content")
+        if len(content) > 10000:
+            raise ValidationError(
+                {"content": "Messages cannot exceed 10,000 characters."}
+            )
 
+        # idempotency_key = request.headers.get("Idempotency-Key")
+
+        # if not idempotency_key:
+        #     raise ValidationError(
+        #         {"Idempotency-Key": "This header is required."}
+        #     )
+
+        # try:
+        #     idempotency_key = str(uuid.UUID(idempotency_key))
+        # except (ValueError, AttributeError):
+        #     raise ValidationError(
+        #         {"Idempotency-Key": "Provide a valid UUID."}
+        #     )
         if not isinstance(content, str) or not content.strip():
             raise ValidationError(
                 {"content": "Enter a non-empty message."}
@@ -298,6 +407,12 @@ class WidgetMessageCreateView(APIView):
         session_token = request.headers.get("X-Widget-Session")
         content = request.data.get("content")
 
+        # user_message = WidgetMessage.objects.create(
+        #     conversation=conversation,
+        #     role=WidgetMessage.Role.USER,
+        #     content=content,
+        # )
+
         if not agent_id:
             raise ValidationError(
                 {"agent_id": "This field is required."}
@@ -330,27 +445,69 @@ class WidgetMessageCreateView(APIView):
                 {"content": "Messages cannot exceed 10,000 characters."}
             )
 
-        chunks = retrieve_relevant_chunks(
-            agent_id=session.agent_id,
-            query=content,
-            limit=5,
+        idempotency_key = request.headers.get("Idempotency-Key")
+
+        if not idempotency_key:
+            raise ValidationError(
+                {"Idempotency-Key": "This header is required."}
+            )
+
+        try:
+            idempotency_key = str(uuid.UUID(idempotency_key))
+        except (ValueError, AttributeError):
+            raise ValidationError(
+                {"Idempotency-Key": "Provide a valid UUID."}
+            )
+
+        # chunks = retrieve_relevant_chunks(
+        #     agent_id=session.agent_id,
+        #     query=content,
+        #     limit=5,
+        # )
+
+        message_request, should_process = claim_widget_message_request(
+            conversation=conversation,
+            idempotency_key=idempotency_key,
+            content=content,
         )
 
-        context = "\n\n".join(
-            f"[Source: {chunk.source.title}]\n{chunk.content}"
-            for chunk in chunks
-        )
+        if not should_process:
+            return Response(
+                {
+                    "conversation_id": conversation.pk,
+                    "user_message": WidgetMessageSerializer(
+                        message_request.user_message
+                    ).data,
+                    "assistant_message": WidgetMessageSerializer(
+                        message_request.assistant_message
+                    ).data,
+                    "sources": message_request.sources,
+                },
+                status=status.HTTP_200_OK,
+            )
 
-        knowledge_section = context or (
-            "No relevant information was found in this agent's "
-            "knowledge base."
-        )
+        try:
+            chunks = retrieve_relevant_chunks(
+                agent_id=session.agent_id,
+                query=content,
+                limit=5,
+            )
 
-        system_prompt = session.agent.system_prompt.strip() or (
-            "You are a helpful institutional assistant."
-        )
+            context = "\n\n".join(
+                f"[Source: {chunk.source.title}]\n{chunk.content}"
+                for chunk in chunks
+            )
 
-        prompt = f"""
+            knowledge_section = context or (
+                "No relevant information was found in this agent's "
+                "knowledge base."
+            )
+
+            system_prompt = session.agent.system_prompt.strip() or (
+                "You are a helpful institutional assistant."
+            )
+
+            prompt = f"""
 {system_prompt}
 
 Response rules:
@@ -374,19 +531,34 @@ USER QUESTION:
 FINAL ANSWER:
 """.strip()
 
-        user_message = WidgetMessage.objects.create(
-            conversation=conversation,
-            role=WidgetMessage.Role.USER,
-            content=content,
-        )
-
-        try:
             answer = generate_response(
                 prompt=prompt,
                 model=session.agent.model_name,
             )
+
         except OllamaError as exc:
+            WidgetMessageRequest.objects.filter(
+                pk=message_request.pk,
+                status=WidgetMessageRequest.Status.PROCESSING,
+            ).update(status=WidgetMessageRequest.Status.FAILED)
+
             raise OllamaServiceUnavailable() from exc
+
+        except Exception:
+            WidgetMessageRequest.objects.filter(
+                pk=message_request.pk,
+                status=WidgetMessageRequest.Status.PROCESSING,
+            ).update(status=WidgetMessageRequest.Status.FAILED)
+
+            raise
+
+        sources = [
+            {
+                "title": chunk.source.title,
+                "chunk_index": chunk.chunk_index,
+            }
+            for chunk in chunks
+        ]
 
         with transaction.atomic():
             assistant_message = WidgetMessage.objects.create(
@@ -394,24 +566,31 @@ FINAL ANSWER:
                 role=WidgetMessage.Role.ASSISTANT,
                 content=answer,
             )
+
+            message_request.assistant_message = assistant_message
+            message_request.sources = sources
+            message_request.status = WidgetMessageRequest.Status.COMPLETED
+            message_request.save(
+                update_fields=[
+                    "assistant_message",
+                    "sources",
+                    "status",
+                    "updated_at",
+                ]
+            )
+
             conversation.save(update_fields=["updated_at"])
 
         return Response(
             {
                 "conversation_id": conversation.pk,
                 "user_message": WidgetMessageSerializer(
-                    user_message
+                    message_request.user_message
                 ).data,
                 "assistant_message": WidgetMessageSerializer(
                     assistant_message
                 ).data,
-                "sources": [
-                    {
-                        "title": chunk.source.title,
-                        "chunk_index": chunk.chunk_index,
-                    }
-                    for chunk in chunks
-                ],
+                "sources": sources,
             },
             status=status.HTTP_200_OK,
         )

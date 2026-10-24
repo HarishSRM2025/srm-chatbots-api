@@ -80,7 +80,14 @@ def claim_widget_message_request(
             return message_request, True
 
     except IntegrityError:
-        pass
+        existing_request = WidgetMessageRequest.objects.filter(
+            conversation=conversation,
+            idempotency_key=idempotency_key,
+        ).exists()
+
+        if not existing_request:
+            raise
+
 
     with transaction.atomic():
         message_request = (

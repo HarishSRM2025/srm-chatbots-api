@@ -1,4 +1,5 @@
 ﻿from datetime import timedelta
+import hashlib
 from unittest.mock import patch
 import uuid
 
@@ -1316,6 +1317,58 @@ class WidgetMessageCreateAPITests(APITestCase):
             1,
         )
 
+    @patch("chat.views.generate_response")
+    def test_processing_idempotency_key_returns_conflict(
+        self,
+        mock_generate,
+    ):
+        from chat.models import WidgetMessageRequest
+
+        content = "Hello"
+        key = str(uuid.uuid4())
+        content_hash = hashlib.sha256(
+            content.encode("utf-8")
+        ).hexdigest()
+
+        user_message = WidgetMessage.objects.create(
+            conversation=self.conversation,
+            role=WidgetMessage.Role.USER,
+            content=content,
+        )
+
+        WidgetMessageRequest.objects.create(
+            conversation=self.conversation,
+            idempotency_key=key,
+            content_hash=content_hash,
+            status=WidgetMessageRequest.Status.PROCESSING,
+            user_message=user_message,
+        )
+
+        response = self.send_message(
+            content,
+            idempotency_key=key,
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_409_CONFLICT,
+        )
+        mock_generate.assert_not_called()
+
+        self.assertEqual(
+            WidgetMessage.objects.filter(
+                conversation=self.conversation,
+                role=WidgetMessage.Role.USER,
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            WidgetMessage.objects.filter(
+                conversation=self.conversation,
+                role=WidgetMessage.Role.ASSISTANT,
+            ).count(),
+            0,
+        )
 
     @patch("chat.views.generate_response")
     def test_failed_request_can_be_retried_with_same_key(

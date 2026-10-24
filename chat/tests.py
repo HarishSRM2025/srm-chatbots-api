@@ -1,21 +1,18 @@
-﻿from datetime import timedelta
+
 import hashlib
-from unittest.mock import patch
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.db import close_old_connections
+from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.utils import timezone
 
 from rest_framework import status
-from django.test import SimpleTestCase, TestCase
-from rest_framework.test import APITestCase
-from agents.models import Agent
-from chat.models import Conversation, Message, WidgetSession
-from chat.widget_security import (
-    create_widget_session,
-    get_widget_session,
-)
-from knowledge.models import KnowledgeChunk, KnowledgeSource
+from rest_framework.test import APIClient, APITestCase
 
 from agents.models import Agent
 from chat.models import (
@@ -25,9 +22,10 @@ from chat.models import (
     WidgetMessage,
     WidgetSession,
 )
-from chat.widget_security import create_widget_session
-
 from chat.widget_origin import is_origin_allowed, normalize_origin
+from chat.widget_security import create_widget_session, get_widget_session
+from knowledge.models import KnowledgeChunk, KnowledgeSource
+
 
 class ConversationAPITests(APITestCase):
     def setUp(self):
@@ -1475,3 +1473,133 @@ class WidgetOriginValidationTests(SimpleTestCase):
         self.assertTrue(
             is_origin_allowed(None, [])
         )
+
+
+
+
+class WidgetMessageConcurrencyTests(TransactionTestCase):
+    reset_sequences = True
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(
+            username="widget_concurrency_owner",
+            email="widget_concurrency_owner@example.com",
+            password="TestPass!987654",
+        )
+
+        self.agent = Agent.objects.create(
+            owner=self.user,
+            name="Concurrency Test Agent",
+            description="Agent used for widget concurrency tests",
+            system_prompt="You are a helpful assistant.",
+            model_name="qwen3:4b",
+            status=Agent.Status.ACTIVE,
+            is_public=True,
+        )
+
+        self.session, self.token = create_widget_session(self.agent)
+        self.conversation = WidgetConversation.objects.create(
+            session=self.session,
+            title="Concurrency test conversation",
+        )
+        self.url = (
+            f"/api/chat/widget/conversations/"
+            f"{self.conversation.pk}/messages/"
+        )
+
+    def test_duplicate_request_while_first_is_processing(self):
+        ai_started = threading.Event()
+        release_ai = threading.Event()
+        key = str(uuid.uuid4())
+        content = "Hello during concurrency testing"
+
+        def generate_response_side_effect(*args, **kwargs):
+            ai_started.set()
+            if not release_ai.wait(timeout=20):
+                raise TimeoutError("Timed out waiting to release mocked AI")
+            return "Concurrent AI response"
+
+        def send_first_request():
+            close_old_connections()
+            try:
+                client = APIClient()
+                return client.post(
+                    self.url,
+                    {
+                        "agent_id": self.agent.pk,
+                        "content": content,
+                    },
+                    format="json",
+                    HTTP_X_WIDGET_SESSION=self.token,
+                    HTTP_IDEMPOTENCY_KEY=key,
+                )
+            finally:
+                close_old_connections()
+
+        try:
+            with patch(
+                "chat.views.retrieve_relevant_chunks",
+                return_value=[],
+            ), patch(
+                "chat.views.generate_response",
+                side_effect=generate_response_side_effect,
+            ) as mock_generate:
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    first_future = executor.submit(send_first_request)
+
+                    self.assertTrue(
+                        ai_started.wait(timeout=15),
+                        "The first request did not reach AI generation",
+                    )
+
+                    # The first request has claimed the idempotency key
+                    # and is paused inside AI generation.
+                    close_old_connections()
+                    try:
+                        second_client = APIClient()
+                        second_response = second_client.post(
+                            self.url,
+                            {
+                                "agent_id": self.agent.pk,
+                                "content": content,
+                            },
+                            format="json",
+                            HTTP_X_WIDGET_SESSION=self.token,
+                            HTTP_IDEMPOTENCY_KEY=key,
+                        )
+                    finally:
+                        close_old_connections()
+
+                    self.assertEqual(
+                        second_response.status_code,
+                        status.HTTP_409_CONFLICT,
+                    )
+
+                    release_ai.set()
+                    first_response = first_future.result(timeout=30)
+
+                self.assertEqual(
+                    first_response.status_code,
+                    status.HTTP_200_OK,
+                )
+                self.assertEqual(mock_generate.call_count, 1)
+
+            self.assertEqual(
+                WidgetMessage.objects.filter(
+                    conversation=self.conversation,
+                    role=WidgetMessage.Role.USER,
+                ).count(),
+                1,
+            )
+            self.assertEqual(
+                WidgetMessage.objects.filter(
+                    conversation=self.conversation,
+                    role=WidgetMessage.Role.ASSISTANT,
+                ).count(),
+                1,
+            )
+
+        finally:
+            # Always unblock the worker if an assertion fails.
+            release_ai.set()

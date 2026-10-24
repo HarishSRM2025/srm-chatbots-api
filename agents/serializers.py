@@ -29,6 +29,7 @@ class AgentSerializer(serializers.ModelSerializer):
             "id",
             "owner",
             "owner_username",
+            "model_name",
             "created_at",
             "updated_at",
         ]

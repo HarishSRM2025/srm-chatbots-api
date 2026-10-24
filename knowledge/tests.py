@@ -1111,3 +1111,41 @@ class KnowledgeRetrievalTests(TestCase):
         )
 
         self.assertEqual(results, [])
+
+    def test_event_query_finds_events_source_by_title_and_plural(self):
+        events = KnowledgeSource.objects.create(
+            agent=self.agent1, title='Events', source_type='text', status='ready',
+        )
+        event = KnowledgeChunk.objects.create(
+            source=events, chunk_index=0,
+            content='Annual research symposium will take place on 28 October.',
+        )
+        results = retrieve_relevant_chunks(self.agent1.id, 'what is the latest event')
+        self.assertIn(event, results)
+        self.assertNotIn(self.nursing_chunk, results)
+
+    def test_large_source_does_not_crowd_out_other_relevant_sources(self):
+        for index in range(1, 8):
+            KnowledgeChunk.objects.create(
+                source=self.source1, chunk_index=index,
+                content='Nursing admission eligibility biology chemistry.',
+            )
+        other = KnowledgeSource.objects.create(
+            agent=self.agent1, title='Other requirements', source_type='text', status='ready',
+        )
+        other_chunk = KnowledgeChunk.objects.create(
+            source=other, chunk_index=0, content='Admission requires an interview.',
+        )
+        results = retrieve_relevant_chunks(self.agent1.id, 'nursing admission biology chemistry', limit=5)
+        self.assertIn(other_chunk, results)
+        self.assertEqual(len(results), 5)
+        self.assertEqual(len({chunk.pk for chunk in results}), 5)
+
+    def test_stop_words_do_not_select_unrelated_source(self):
+        self.assertEqual(retrieve_relevant_chunks(self.agent1.id, 'what is the latest event'), [])
+
+    def test_title_matching_still_excludes_other_agents_and_failed_sources(self):
+        for agent, status in [(self.agent2, 'ready'), (self.agent1, 'failed')]:
+            source = KnowledgeSource.objects.create(agent=agent, title='Events', source_type='text', status=status)
+            KnowledgeChunk.objects.create(source=source, chunk_index=0, content='Annual symposium.')
+        self.assertEqual(retrieve_relevant_chunks(self.agent1.id, 'latest event'), [])

@@ -350,6 +350,9 @@ class ConversationViewSet(viewsets.ModelViewSet):
         7. Be clear and concise.
 
         KNOWLEDGE CONTEXT:
+        Review all supplied sources before answering. If one source does not
+        answer the question, check the other supplied sources. Only say the
+        information is unavailable after checking them all.
         <knowledge>
         {knowledge_section}
         </knowledge>
@@ -528,6 +531,9 @@ Response rules:
 7. Be clear and concise.
 
 KNOWLEDGE CONTEXT:
+Review all supplied sources before answering. If one source does not answer
+the question, check the other supplied sources before saying information
+is unavailable.
 <knowledge>
 {knowledge_section}
 </knowledge>

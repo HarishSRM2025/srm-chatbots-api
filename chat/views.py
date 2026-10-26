@@ -22,7 +22,7 @@ from .models import (
 from django.db import transaction
 import hashlib
 import uuid
-from .ollama_client import OllamaError, generate_response
+from .gemini_client import GeminiError, generate_response
 from .serializers import ConversationSerializer, MessageSerializer
 from .throttles import (
     WidgetMessageRateThrottle,
@@ -35,10 +35,10 @@ from .widget_serializers import WidgetConversationSerializer
 from django.db import IntegrityError, transaction
 
 
-class OllamaServiceUnavailable(APIException):
+class GeminiServiceUnavailable(APIException):
     status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    default_detail = "The local AI service is unavailable."
-    default_code = "ollama_unavailable"
+    default_detail = "The Gemini AI service is unavailable."
+    default_code = "gemini_unavailable"
 
 
 class WidgetMessageConflict(APIException):
@@ -376,9 +376,9 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 prompt=prompt,
                 model=conversation.agent.model_name,
             )
-        except OllamaError as exc:
+        except GeminiError as exc:
             # Avoid returning internal service details to the client.
-            raise OllamaServiceUnavailable() from exc
+            raise GeminiServiceUnavailable() from exc
 
         with transaction.atomic():
             assistant_message = Message.objects.create(
@@ -549,13 +549,13 @@ FINAL ANSWER:
                 model=session.agent.model_name,
             )
 
-        except OllamaError as exc:
+        except GeminiError as exc:
             WidgetMessageRequest.objects.filter(
                 pk=message_request.pk,
                 status=WidgetMessageRequest.Status.PROCESSING,
             ).update(status=WidgetMessageRequest.Status.FAILED)
 
-            raise OllamaServiceUnavailable() from exc
+            raise GeminiServiceUnavailable() from exc
 
         except Exception:
             WidgetMessageRequest.objects.filter(

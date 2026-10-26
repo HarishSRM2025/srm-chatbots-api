@@ -137,7 +137,7 @@ class AgentAPITests(APITestCase):
             response.status_code,
             status.HTTP_201_CREATED,
         )
-        self.assertEqual(response.data["model_name"], "qwen3:4b")
+        self.assertEqual(response.data["model_name"], "gemini-2.5-flash-lite")
         self.assertEqual(response.data["status"], Agent.Status.ACTIVE)
 
     def test_duplicate_name_is_rejected_for_same_user(self):

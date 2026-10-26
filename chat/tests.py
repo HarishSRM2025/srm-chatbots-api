@@ -241,13 +241,13 @@ class ConversationAPITests(APITestCase):
         )
 
     @patch("chat.views.generate_response")
-    def test_ollama_failure_returns_service_unavailable(
+    def test_gemini_failure_returns_service_unavailable(
         self,
         mock_generate,
     ):
-        from chat.ollama_client import OllamaError
+        from chat.gemini_client import GeminiError
 
-        mock_generate.side_effect = OllamaError("Internal test detail")
+        mock_generate.side_effect = GeminiError("Internal test detail")
         self.client.force_authenticate(user=self.user1)
 
         response = self.client.post(
@@ -284,13 +284,13 @@ class ConversationAPITests(APITestCase):
         )
 
     @patch("chat.views.generate_response")
-    def test_ollama_failure_preserves_user_message_only(
+    def test_gemini_failure_preserves_user_message_only(
         self,
         mock_generate,
     ):
-        from chat.ollama_client import OllamaError
+        from chat.gemini_client import GeminiError
 
-        mock_generate.side_effect = OllamaError(
+        mock_generate.side_effect = GeminiError(
             "Internal test detail"
         )
         self.client.force_authenticate(user=self.user1)
@@ -911,7 +911,7 @@ class WidgetMessageCreateAPITests(APITestCase):
             name="Public Test Agent",
             description="Agent used for widget message tests",
             system_prompt="You are a helpful institutional assistant.",
-            model_name="qwen3:4b",
+            model_name="gemini-2.5-flash-lite",
             status=Agent.Status.ACTIVE,
             is_public=True,
         )
@@ -1058,7 +1058,7 @@ class WidgetMessageCreateAPITests(APITestCase):
             name="Another Public Agent",
             description="Another test agent",
             system_prompt="You are helpful.",
-            model_name="qwen3:4b",
+            model_name="gemini-2.5-flash-lite",
             status=Agent.Status.ACTIVE,
             is_public=True,
         )
@@ -1117,13 +1117,13 @@ class WidgetMessageCreateAPITests(APITestCase):
 
     @patch("chat.views.generate_response")
     @patch("chat.views.retrieve_relevant_chunks")
-    def test_ollama_failure_returns_service_unavailable(
+    def test_gemini_failure_returns_service_unavailable(
         self, mock_retrieve, mock_generate
     ):
-        from chat.ollama_client import OllamaError
+        from chat.gemini_client import GeminiError
 
         mock_retrieve.return_value = []
-        mock_generate.side_effect = OllamaError("Test connection failure")
+        mock_generate.side_effect = GeminiError("Test connection failure")
 
         response = self.send_message("Hello")
 
@@ -1373,10 +1373,10 @@ class WidgetMessageCreateAPITests(APITestCase):
         self,
         mock_generate,
     ):
-        from chat.views import OllamaError
+        from chat.views import GeminiError
 
         mock_generate.side_effect = [
-            OllamaError("Local AI service unavailable"),
+            GeminiError("Gemini AI service unavailable"),
             "Recovered AI response",
         ]
         key = str(uuid.uuid4())
@@ -1493,7 +1493,7 @@ class WidgetMessageConcurrencyTests(TransactionTestCase):
             name="Concurrency Test Agent",
             description="Agent used for widget concurrency tests",
             system_prompt="You are a helpful assistant.",
-            model_name="qwen3:4b",
+            model_name="gemini-2.5-flash-lite",
             status=Agent.Status.ACTIVE,
             is_public=True,
         )

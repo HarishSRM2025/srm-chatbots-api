@@ -17,7 +17,7 @@ class Agent(models.Model):
     name = models.CharField(max_length=150)
     description = models.TextField(blank=True)
     system_prompt = models.TextField()
-    model_name = models.CharField(max_length=100, default="qwen3:4b")
+    model_name = models.CharField(max_length=100, default="gemini-2.5-flash-lite")
     status = models.CharField(
         max_length=10,
         choices=Status.choices,

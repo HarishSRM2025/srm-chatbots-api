@@ -1149,3 +1149,10 @@ class KnowledgeRetrievalTests(TestCase):
             source = KnowledgeSource.objects.create(agent=agent, title='Events', source_type='text', status=status)
             KnowledgeChunk.objects.create(source=source, chunk_index=0, content='Annual symposium.')
         self.assertEqual(retrieve_relevant_chunks(self.agent1.id, 'latest event'), [])
+
+    def test_latest_modifier_does_not_match_admissions_for_event_question(self):
+        self.nursing_chunk.content = 'Please confirm the latest admission notification.'
+        self.nursing_chunk.save(update_fields=['content'])
+        source = KnowledgeSource.objects.create(agent=self.agent1, title='Events', source_type='url', status='ready')
+        event = KnowledgeChunk.objects.create(source=source, chunk_index=0, content='Youth Red Cross Day Celebration. March 4, 2026.')
+        self.assertEqual(retrieve_relevant_chunks(self.agent1.id, 'latest event'), [event])

@@ -32,6 +32,11 @@ def retrieve_relevant_chunks(agent_id: int, query: str, limit: int = 5) -> list:
     if not query or not query.strip() or limit < 1:
         return []
     query_tokens = tokenize(query)
+    # Time qualifiers alone must not pull in unrelated topics (for example,
+    # "latest admission notification" when the question is "latest event").
+    topical_tokens = query_tokens - {'latest', 'recent', 'new', 'current', 'upcoming', 'next'}
+    if topical_tokens:
+        query_tokens = topical_tokens
     if not query_tokens:
         return []
     chunks = list(KnowledgeChunk.objects.filter(

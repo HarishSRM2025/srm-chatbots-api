@@ -199,3 +199,31 @@ class ExtractTextFromURLSizeLimitTests(SimpleTestCase):
         self.assertTrue(response.closed)
         self.assertTrue(response.released)
         pool.close.assert_called_once()
+class ReadableWebsiteContentTests(SimpleTestCase):
+    def test_event_archive_keeps_titles_dates_and_links_without_site_navigation(self):
+        from knowledge.url_extraction import extract_readable_html
+        html = b'''<html><body><header>Site menu</header><div class="main-content">
+        <article><a class="screen-reader-text">Duplicate title</a>
+        <header><h3><a href="/event-one/">Youth Red Cross Day</a></h3></header>
+        <p>Student celebration.</p><footer><time>March 4, 2026</time></footer></article>
+        <article><h3><a href="/event-two/">Cancer awareness</a></h3><time>February 25, 2026</time></article>
+        </div><div id="footer-outer">Admissions contacts</div><nav>Courses</nav></body></html>'''
+        text = extract_readable_html(html, 'https://example.com/events/')
+        self.assertIn('Youth Red Cross Day', text)
+        self.assertIn('March 4, 2026', text)
+        self.assertIn('https://example.com/event-one/', text)
+        self.assertIn('Cancer awareness', text)
+        self.assertNotIn('Duplicate title', text)
+        self.assertNotIn('Admissions contacts', text)
+        self.assertNotIn('Site menu', text)
+        self.assertNotIn('Courses', text)
+
+    def test_main_content_is_preferred_on_non_archive_page(self):
+        from knowledge.url_extraction import extract_readable_html
+        text = extract_readable_html(b'<body><div>Menu clutter</div><main><h1>Admissions</h1><p>Apply here.</p></main></body>', 'https://example.com/')
+        self.assertEqual(text, 'Admissions Apply here.')
+
+    def test_meta_charset_is_used_when_header_omits_it(self):
+        from knowledge.url_extraction import extract_readable_html
+        html = '<html><meta charset="utf-8"><body><main>Fresher\u2019s Day</main></body></html>'.encode('utf-8')
+        self.assertIn('Fresher\u2019s Day', extract_readable_html(html, 'https://example.com/'))

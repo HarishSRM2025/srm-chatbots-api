@@ -223,17 +223,7 @@ def extract_text_from_url(url: str) -> str:
                 charset = encoding.lower().split("charset=", 1)[1]
                 charset = charset.split(";", 1)[0].strip(" '\"")
 
-            soup = BeautifulSoup(
-                html.decode(charset or "utf-8", errors="replace"),
-                "html.parser",
-            )
-
-            for element in soup(
-                ["script", "style", "noscript", "svg", "nav", "footer", "header"]
-            ):
-                element.decompose()
-
-            text = soup.get_text(separator=" ", strip=True)
+            text = extract_readable_html(html, current_url, charset)
 
             if not text:
                 raise ValueError("No readable text was found on the webpage.")
@@ -253,3 +243,37 @@ def extract_text_from_url(url: str) -> str:
                 pool.close()
 
     raise ValueError("The webpage could not be fetched.")
+
+
+def extract_readable_html(html: bytes, page_url: str, charset: str | None = None) -> str:
+    """Prefer the page's main content and preserve article titles and dates.
+
+    Archive pages supply summaries, not the complete linked articles. Include
+    the article URL as a reference without silently crawling unrelated pages.
+    """
+    soup = BeautifulSoup(html, 'html.parser', from_encoding=charset)
+    for element in soup(['script', 'style', 'noscript', 'svg', 'nav', 'aside']):
+        element.decompose()
+    for element in soup.select('.screen-reader-text, #footer-outer, #slide-out-widget-area, [role="navigation"]'):
+        element.decompose()
+    for element in soup(['header', 'footer']):
+        if not element.find_parent('article'):
+            element.decompose()
+    root = soup.select_one('main, [role="main"], .main-content, #main-content') or soup.body or soup
+    articles = root.find_all('article')
+    if articles:
+        blocks = []
+        for article in articles:
+            # Nested article elements must not duplicate their parent's text.
+            if article.find_parent('article'):
+                continue
+            block = article.get_text(separator=' ', strip=True)
+            link = article.select_one('h1 a[href], h2 a[href], h3 a[href], .entry-title a[href]')
+            if link:
+                target = urljoin(page_url, link['href'])
+                if urlparse(target).scheme in {'http', 'https'}:
+                    block += '\nArticle URL: ' + target
+            if block:
+                blocks.append(block)
+        return '\n\n'.join(blocks)
+    return root.get_text(separator=' ', strip=True)

@@ -911,7 +911,7 @@ class WidgetMessageCreateAPITests(APITestCase):
             name="Public Test Agent",
             description="Agent used for widget message tests",
             system_prompt="You are a helpful institutional assistant.",
-            model_name="gemini-2.5-flash-lite",
+            model_name="gemini-3.5-flash-lite",
             status=Agent.Status.ACTIVE,
             is_public=True,
         )
@@ -1058,7 +1058,7 @@ class WidgetMessageCreateAPITests(APITestCase):
             name="Another Public Agent",
             description="Another test agent",
             system_prompt="You are helpful.",
-            model_name="gemini-2.5-flash-lite",
+            model_name="gemini-3.5-flash-lite",
             status=Agent.Status.ACTIVE,
             is_public=True,
         )
@@ -1493,7 +1493,7 @@ class WidgetMessageConcurrencyTests(TransactionTestCase):
             name="Concurrency Test Agent",
             description="Agent used for widget concurrency tests",
             system_prompt="You are a helpful assistant.",
-            model_name="gemini-2.5-flash-lite",
+            model_name="gemini-3.5-flash-lite",
             status=Agent.Status.ACTIVE,
             is_public=True,
         )

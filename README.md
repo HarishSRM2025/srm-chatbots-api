@@ -10,7 +10,7 @@ Chat and public widgets use the Gemini Developer API. Ollama is no longer needed
 
    ```dotenv
    GEMINI_API_KEY=your_actual_api_key
-   GEMINI_MODEL=gemini-2.5-flash-lite
+   GEMINI_MODEL=gemini-3.5-flash-lite
    ```
 
    Keep the key on the backend; never put it in frontend environment variables.

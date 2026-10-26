@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 
 from agents.models import Agent
 from knowledge.retrieval import retrieve_relevant_chunks
+from knowledge.context import build_knowledge_context
 
 from .models import (
     Conversation,
@@ -308,10 +309,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
             limit=5,
         )
 
-        context = "\n\n".join(
-            f"[Source: {chunk.source.title}]\n{chunk.content}"
-            for chunk in chunks
-        )
+        context = build_knowledge_context(chunks)
 
         if context:
             knowledge_section = context
@@ -348,6 +346,10 @@ class ConversationViewSet(viewsets.ModelViewSet):
         6. Return only the final answer intended for the user. Do not include
         internal reasoning, analysis, or <think> tags.
         7. Be clear and concise.
+8. Copy complete phone numbers and contact details exactly from the supplied
+   sources. Prefer a complete value over a truncated duplicate. Never output
+   a partial number or ask the user to look it up when the full value is supplied.
+   If no complete value is supplied, say it is unavailable; never guess digits.
 
         KNOWLEDGE CONTEXT:
         Review all supplied sources before answering. If one source does not
@@ -503,10 +505,7 @@ class WidgetMessageCreateView(APIView):
                 limit=5,
             )
 
-            context = "\n\n".join(
-                f"[Source: {chunk.source.title}]\n{chunk.content}"
-                for chunk in chunks
-            )
+            context = build_knowledge_context(chunks)
 
             knowledge_section = context or (
                 "No relevant information was found in this agent's "
@@ -529,6 +528,10 @@ Response rules:
 5. If the context lacks information for an institutional question, say so.
 6. Return only the final answer intended for the user.
 7. Be clear and concise.
+8. Copy complete phone numbers and contact details exactly from the supplied
+   sources. Prefer a complete value over a truncated duplicate. Never output
+   a partial number or ask the user to look it up when the full value is supplied.
+   If no complete value is supplied, say it is unavailable; never guess digits.
 
 KNOWLEDGE CONTEXT:
 Review all supplied sources before answering. If one source does not answer

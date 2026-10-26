@@ -6,7 +6,7 @@ from django.test import SimpleTestCase, override_settings
 from chat.gemini_client import GeminiError, generate_response
 
 
-@override_settings(GEMINI_API_KEY="test-key", GEMINI_MODEL="gemini-2.5-flash-lite")
+@override_settings(GEMINI_API_KEY="test-key", GEMINI_MODEL="gemini-3.5-flash-lite")
 class GeminiClientTests(SimpleTestCase):
     @patch("chat.gemini_client.requests.post")
     def test_success_and_request_authentication(self, post):
@@ -21,7 +21,7 @@ class GeminiClientTests(SimpleTestCase):
         self.assertEqual(generate_response("Hi", timeout=15), "Hello world")
         post.assert_called_once_with(
             "https://generativelanguage.googleapis.com/v1beta/models/"
-            "gemini-2.5-flash-lite:generateContent",
+            "gemini-3.5-flash-lite:generateContent",
             headers={"x-goog-api-key": "test-key"},
             json={"contents": [{"role": "user", "parts": [{"text": "Hi"}]}]},
             timeout=15,
@@ -69,7 +69,9 @@ class GeminiClientTests(SimpleTestCase):
             "finishReason": "STOP", "content": {"parts": [{"text": "OK"}]},
         }]}
         for model, expected in (("models/gemini-2.5-flash", "gemini-2.5-flash"),
-                                ("qwen3:4b", "gemini-2.5-flash-lite")):
+                                ("gemini-2.5-flash-lite", "gemini-3.5-flash-lite"),
+                                ("models/gemini-2.5-flash-lite", "gemini-3.5-flash-lite"),
+                                ("qwen3:4b", "gemini-3.5-flash-lite")):
             with self.subTest(model=model):
                 generate_response("Hi", model=model)
                 self.assertTrue(post.call_args.args[0].endswith(f"/{expected}:generateContent"))

@@ -1,3 +1,5 @@
+import re
+
 from .url_extraction import extract_text_from_url
 from django.db import transaction
 
@@ -27,13 +29,22 @@ def split_text(
     step = chunk_size - overlap
     chunks = []
 
+    # Keep phone-like numeric sequences intact, including spaces and hyphens.
+    numbers = list(re.finditer(r"\+?\d(?:[\d ()/.-]{0,48}\d)?", text))
+
     for start in range(0, len(text), step):
-        chunk = text[start : start + chunk_size].strip()
+        end = min(start + chunk_size, len(text))
+        for number in numbers:
+            if number.start() < start < number.end():
+                start = number.start()
+            if number.start() < end < number.end():
+                end = number.end()
+        chunk = text[start:end].strip()
 
         if chunk:
             chunks.append(chunk)
 
-        if start + chunk_size >= len(text):
+        if end >= len(text):
             break
 
     return chunks

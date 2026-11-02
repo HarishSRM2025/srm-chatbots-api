@@ -47,6 +47,13 @@ def normalize_origin(origin):
         return None
 
 
+def normalize_configured_origin(origin):
+    # Stored settings may predate API validation or have been edited in admin.
+    if not isinstance(origin, str):
+        return None
+    return normalize_origin(origin.strip().removesuffix("/"))
+
+
 def is_origin_allowed(origin, allowed_origins):
     # Requests without Origin are handled separately.
     if origin is None:
@@ -63,7 +70,7 @@ def is_origin_allowed(origin, allowed_origins):
     normalized_allowed = {
         normalized
         for item in allowed_origins
-        if (normalized := normalize_origin(item)) is not None
+        if (normalized := normalize_configured_origin(item)) is not None
     }
 
     return normalized_origin in normalized_allowed
@@ -80,5 +87,7 @@ def validate_widget_origin(request, agent):
 
     if not is_origin_allowed(origin, agent.allowed_origins):
         raise PermissionDenied(
-            "This website origin is not allowed to use this widget."
+            f"Website origin {origin!r} is not allowed for agent {agent.pk}. "
+            "Add this exact origin in that agent?s Allowed widget origins and save. "
+            "For an iframe, use the origin of the iframe URL, not the parent page."
         )

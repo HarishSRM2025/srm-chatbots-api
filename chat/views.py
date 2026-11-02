@@ -346,8 +346,11 @@ class ConversationViewSet(viewsets.ModelViewSet):
    sources. Prefer a complete value over a truncated duplicate. Never output
    a partial number or ask the user to look it up when the full value is supplied.
    If no complete value is supplied, say it is unavailable; never guess digits.
-9. When relevant, include the exact supplied source page URL in your answer.
-   Never invent URLs. Sources without a URL must not be given a guessed link.
+9. Do not add URLs, source labels, citations, or a references section to the
+   answer. The application displays one relevant knowledge page link separately.
+10. Use short paragraphs separated by blank lines. Put event names and section
+    titles in **bold**. Do not prefix entries with stars, bullets, or numbers.
+    Put each event in its own paragraph with its date and description.
 
         KNOWLEDGE CONTEXT:
         Review all supplied sources before answering. If one source does not
@@ -525,8 +528,11 @@ Response rules:
    sources. Prefer a complete value over a truncated duplicate. Never output
    a partial number or ask the user to look it up when the full value is supplied.
    If no complete value is supplied, say it is unavailable; never guess digits.
-9. When relevant, include the exact supplied source page URL in your answer.
-   Never invent URLs. Sources without a URL must not be given a guessed link.
+9. Do not add URLs, source labels, citations, or a references section to the
+   answer. The application displays one relevant knowledge page link separately.
+10. Use short paragraphs separated by blank lines. Put event names and section
+    titles in **bold**. Do not prefix entries with stars, bullets, or numbers.
+    Put each event in its own paragraph with its date and description.
 
 KNOWLEDGE CONTEXT:
 Review all supplied sources before answering. If one source does not answer

@@ -1019,7 +1019,7 @@ class WidgetMessageCreateAPITests(APITestCase):
 
         self.assertEqual(
             response.data["sources"],
-            [{"title": "Admissions Guide", "chunk_index": 0}],
+            [{"title": "Admissions Guide", "url": "", "chunk_index": 0}],
         )
 
     def test_rejects_missing_session_token(self):

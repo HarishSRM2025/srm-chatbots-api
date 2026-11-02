@@ -23,5 +23,30 @@ def build_knowledge_context(chunks):
             overlap = next((size for size in range(min(len(content), len(continuation)), 0, -1)
                             if content[-size:] == continuation[:size]), 0)
             content += continuation[overlap:] if overlap else "\n" + continuation
-        blocks.append(f"[Source: {chunk.source.title}]\n{content}")
+        url = safe_source_url(chunk.source.source_url)
+        blocks.append(f"[Source: {chunk.source.title}]\nPage URL: {url or 'Unavailable'}\n{content}")
     return "\n\n".join(blocks)
+
+
+def safe_source_url(value):
+    from urllib.parse import urlsplit
+    try:
+        parsed = urlsplit(value)
+        return value if parsed.scheme in ("http", "https") and parsed.netloc else ""
+    except ValueError:
+        return ""
+
+
+def build_sources(chunks):
+    sources = []
+    seen = set()
+    for chunk in chunks:
+        if chunk.source_id in seen:
+            continue
+        seen.add(chunk.source_id)
+        sources.append({
+            "title": chunk.source.title,
+            "url": safe_source_url(chunk.source.source_url),
+            "chunk_index": chunk.chunk_index,
+        })
+    return sources

@@ -11,7 +11,7 @@ from rest_framework.views import APIView
 
 from agents.models import Agent
 from knowledge.retrieval import retrieve_relevant_chunks
-from knowledge.context import build_knowledge_context
+from knowledge.context import build_knowledge_context, build_sources
 
 from .models import (
     Conversation,
@@ -213,6 +213,7 @@ class WidgetConversationHistoryView(APIView):
 
         return Response(
             {
+                "predefined_questions": session.agent.predefined_questions,
                 "conversation": WidgetConversationSerializer(conversation).data,
                 "messages": WidgetMessageSerializer(
                     conversation.messages.all(),
@@ -272,11 +273,6 @@ class ConversationViewSet(viewsets.ModelViewSet):
             )
 
         content = request.data.get("content")
-        if len(content) > 10000:
-            raise ValidationError(
-                {"content": "Messages cannot exceed 10,000 characters."}
-            )
-
         # idempotency_key = request.headers.get("Idempotency-Key")
 
         # if not idempotency_key:
@@ -350,6 +346,8 @@ class ConversationViewSet(viewsets.ModelViewSet):
    sources. Prefer a complete value over a truncated duplicate. Never output
    a partial number or ask the user to look it up when the full value is supplied.
    If no complete value is supplied, say it is unavailable; never guess digits.
+9. When relevant, include the exact supplied source page URL in your answer.
+   Never invent URLs. Sources without a URL must not be given a guessed link.
 
         KNOWLEDGE CONTEXT:
         Review all supplied sources before answering. If one source does not
@@ -387,6 +385,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 conversation=conversation,
                 role=Message.Role.ASSISTANT,
                 content=answer,
+                sources=build_sources(chunks),
             )
             conversation.save(update_fields=["updated_at"])
 
@@ -397,13 +396,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 "assistant_message": MessageSerializer(
                     assistant_message
                 ).data,
-                "sources": [
-                    {
-                        "title": chunk.source.title,
-                        "chunk_index": chunk.chunk_index,
-                    }
-                    for chunk in chunks
-                ],
+                "sources": assistant_message.sources,
             },
             status=status.HTTP_200_OK,
         )
@@ -532,6 +525,8 @@ Response rules:
    sources. Prefer a complete value over a truncated duplicate. Never output
    a partial number or ask the user to look it up when the full value is supplied.
    If no complete value is supplied, say it is unavailable; never guess digits.
+9. When relevant, include the exact supplied source page URL in your answer.
+   Never invent URLs. Sources without a URL must not be given a guessed link.
 
 KNOWLEDGE CONTEXT:
 Review all supplied sources before answering. If one source does not answer
@@ -568,19 +563,14 @@ FINAL ANSWER:
 
             raise
 
-        sources = [
-            {
-                "title": chunk.source.title,
-                "chunk_index": chunk.chunk_index,
-            }
-            for chunk in chunks
-        ]
+        sources = build_sources(chunks)
 
         with transaction.atomic():
             assistant_message = WidgetMessage.objects.create(
                 conversation=conversation,
                 role=WidgetMessage.Role.ASSISTANT,
                 content=answer,
+                sources=build_sources(chunks),
             )
 
             message_request.assistant_message = assistant_message
@@ -643,6 +633,7 @@ class WidgetSessionCreateView(viewsets.ViewSet):
                 "session_token": token,
                 "expires_at": session.expires_at,
                 "agent_id": agent.pk,
+                "predefined_questions": agent.predefined_questions,
             },
             status=status.HTTP_201_CREATED,
         )

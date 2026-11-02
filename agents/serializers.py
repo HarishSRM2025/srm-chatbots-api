@@ -5,6 +5,10 @@ from .models import Agent
 
 
 class AgentSerializer(serializers.ModelSerializer):
+    predefined_questions = serializers.ListField(
+        child=serializers.CharField(max_length=500, allow_blank=False),
+        max_length=20, required=False,
+    )
     owner_username = serializers.CharField(
         source="owner.username",
         read_only=True,
@@ -22,6 +26,7 @@ class AgentSerializer(serializers.ModelSerializer):
             "model_name",
             "status",
             "is_public",
+            "predefined_questions",
             "created_at",
             "updated_at",
         ]

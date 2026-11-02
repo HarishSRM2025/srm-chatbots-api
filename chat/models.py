@@ -38,6 +38,7 @@ class Message(models.Model):
     )
     role = models.CharField(max_length=10, choices=Role.choices)
     content = models.TextField()
+    sources = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -113,6 +114,7 @@ class WidgetMessage(models.Model):
     )
     role = models.CharField(max_length=10, choices=Role.choices)
     content = models.TextField()
+    sources = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

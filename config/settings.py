@@ -202,10 +202,11 @@ SIMPLE_JWT = {
 
 # CORS Settings
 CORS_ALLOWED_ORIGINS = [
-    origin.strip()
+    origin.strip().rstrip("/")
     for origin in os.getenv(
         "CORS_ALLOWED_ORIGINS",
-        "http://localhost:3000,http://127.0.0.1:3000","https://srm-nursing-frontend.vercel.app/","http://localhost:5173/"
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "https://srm-nursing-frontend.vercel.app,http://localhost:5173",
     ).split(",")
     if origin.strip()
 ]
